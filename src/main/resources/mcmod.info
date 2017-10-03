@@ -1,0 +1,21 @@
+[
+    {
+      "modid": "ee",
+      "name": "Equivalent Exchange",
+      "description": "Transmute stuff into other stuff! Become a Minecraft God!",
+      "version": "${version}",
+      "mcversion": "${mcversion}",
+      "url": "https://equivalent.exchange/",
+      "updateUrl": "https://ee.pahimar.com/update/versions.json",
+      "authorList": [
+        "pahimar"
+      ],
+      "credits": "x3n0ph0b3, ForgeCraft, and my Patrons!",
+      "logoFile": "",
+      "screenshots": [
+      ],
+      "parent":"",
+      "dependencies": [
+      ]
+    }
+]

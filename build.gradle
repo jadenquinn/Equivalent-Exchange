@@ -1,0 +1,188 @@
+import groovy.json.JsonException
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+
+// For those who want the bleeding edge
+buildscript {
+    repositories {
+	mavenCentral()
+        jcenter()
+        maven { url = "http://files.minecraftforge.net/maven" }
+		maven { url = "https://plugins.gradle.org/m2/" }
+		maven { url = "https://oss.sonatype.org/content/repositories/snapshots/" }
+    }
+    dependencies {
+        classpath "net.minecraftforge.gradle:ForgeGradle:2.3-SNAPSHOT"
+        classpath "gradle.plugin.com.matthewprenger:CurseGradle:1.0.9"
+    }
+}
+
+repositories {
+    maven { url "http://dvs1.progwml6.com/files/maven" }
+}
+
+apply plugin: "java"
+apply plugin: "net.minecraftforge.gradle.forge"
+apply plugin: "com.matthewprenger.cursegradle"
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+version = "${minecraft_version}-${mod_version}"
+group = mod_group
+archivesBaseName = mod_artifact_basename
+
+minecraft {
+    version = minecraft_version + "-" + forge_version
+    runDir = "run"
+
+    useDepAts = true // Required for JEI
+
+    // Set mod version in code prior to compilation
+    replaceIn "EquivalentExchange.java"
+    replace "@MOD_VERSION@", "${mod_version}"
+
+    // Set the jar signature in code prior to compilation, if it exists as a build property
+    if (project.hasProperty("sha1_signature")) {
+        replace "@FINGERPRINT@", project.sha1_signature
+    }
+
+    // Specify the mcp mappings to use
+    mappings = mcp_mappings_version
+}
+
+dependencies {
+    deobfCompile "mezz.jei:jei_${minecraft_version}:${dep_jei_version}"
+}
+
+processResources {
+    // this will ensure that this task is redone when the versions change.
+    inputs.property "version", project.version
+    inputs.property "mcversion", project.minecraft.version
+
+    // exclude xcf files, as they are for development only
+    exclude "**/*.xcf"
+
+    // replace stuff in mcmod.info, nothing else
+    from(sourceSets.main.resources.srcDirs) {
+        include "mcmod.info"
+
+        // replace version and mcversion
+        expand "version": project.version, "mcversion": project.minecraft.version
+    }
+
+    // copy everything else, thats not the mcmod.info
+    from(sourceSets.main.resources.srcDirs) {
+        exclude "mcmod.info"
+    }
+}
+
+task devJar(type: Jar, dependsOn: "classes") {
+    from(sourceSets.main.output) {
+        include "**"
+    }
+
+    extension = "jar"
+    classifier = "dev"
+}
+
+artifacts {
+    archives devJar
+}
+
+task signJar(type: SignJar, dependsOn: ["jar", "devJar"]) {
+    onlyIf {
+        project.hasProperty('keystore_location')
+    }
+
+    keyStore = project.hasProperty('keystore_location') ? project.getProperty('keystore_location') : "";
+    storePass = project.hasProperty('keystore_password') ? project.getProperty('keystore_password') : "";
+    alias = project.hasProperty('keystore_alias') ? project.getProperty('keystore_alias') : "";
+    keyPass = project.hasProperty('keystore_password') ? project.getProperty('keystore_password') : "";
+    inputFile = jar.archivePath
+    outputFile = jar.archivePath
+}
+
+curseforge {
+    apiKey = project.hasProperty('curseforge_apikey') ? project.curseforge_apikey : ''
+    project {
+        id = project.hasProperty('curseforge_projectid') ? project.curseforge_projectid : '0'
+        releaseType = mod_release_type
+        changelogType = 'text'
+        changelog = file("build/libs/${project.archivesBaseName}-${project.version}-changelog.txt")
+        addArtifact devJar
+        relations {
+            optionalLibrary 'jei'
+        }
+    }
+}
+
+/**
+ *  Build the json file that MinecraftForge's Update Checker will use to check for new versions
+ *
+ *  MinecraftForge Update Checker documentation - http://mcforge.readthedocs.io/en/latest/gettingstarted/autoupdate/
+ */
+task buildVersionFile {
+
+    def minecraftVersion = "${minecraft_version}"
+    def modVersion = "${mod_version}"
+    def isReleaseVersion = project.hasProperty("mod_release_type") && project.property("mod_release_type") == "release"
+    def fileName = "versions.json"
+    def remoteUrl = "${remote_url}"
+    def changelogStatement = "Changelog available at " + remoteUrl + minecraftVersion + "/${project.archivesBaseName}-${project.version}-changelog.txt"
+    def localUpdateJson = new HashMap()
+
+    // Grab the remote file so that we can append new entries to it
+    try {
+        def remoteUpdateJson = new JsonSlurper().parse(new URL(remoteUrl + 'update/' + fileName))
+
+        if (remoteUpdateJson instanceof Map) {
+            localUpdateJson.putAll(remoteUpdateJson)
+        }
+    }
+    catch (JsonException e) {}
+
+    // Set homepage
+    localUpdateJson.put("homepage", remoteUrl)
+
+    // Add new mod version to the list of mod versions for this version of Minecraft
+    if (localUpdateJson.get(minecraftVersion) instanceof Map) {
+        ((Map) localUpdateJson.get(minecraftVersion)).put(modVersion, changelogStatement)
+    }
+    else {
+        def modVersionsMap = new HashMap()
+        modVersionsMap.put(modVersion, changelogStatement)
+        localUpdateJson.put(minecraftVersion, modVersionsMap)
+    }
+
+    // Add new versions to the promos list
+    if (localUpdateJson.get("promos") instanceof Map) {
+        ((Map) localUpdateJson.get("promos")).put("latest", modVersion)
+        ((Map) localUpdateJson.get("promos")).put(minecraftVersion + "-latest", modVersion)
+
+        if (isReleaseVersion) {
+            ((Map) localUpdateJson.get("promos")).put("recommended", modVersion)
+            ((Map) localUpdateJson.get("promos")).put(minecraftVersion + "-recommended", modVersion)
+        }
+    }
+    else {
+        def promosMap = new HashMap<String, String>()
+
+        promosMap.put("latest", modVersion)
+        promosMap.put(minecraftVersion + "-latest", modVersion)
+
+        if (isReleaseVersion) {
+            promosMap.put("recommended", modVersion)
+            promosMap.put(minecraftVersion + "-recommended", modVersion)
+        }
+
+        localUpdateJson.put("promos", promosMap)
+    }
+
+    // Output new versions file
+    def localUpdateFile = new File(fileName)
+    if (!localUpdateFile.exists()) {
+        localUpdateFile.createNewFile()
+    }
+    localUpdateFile.setText(JsonOutput.prettyPrint(JsonOutput.toJson(localUpdateJson)))
+}
